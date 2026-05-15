@@ -1,0 +1,17 @@
+# Dados brutos e artefatos processados nao devem ser versionados.
+raw/**/*
+!raw/**/
+!raw/**/.gitkeep
+
+processed/**/*
+!processed/**/
+!processed/**/.gitkeep
+
+unified/*.parquet
+unified/*.csv
+unified/*.pkl
+
+__pycache__/
+*.py[cod]
+.ipynb_checkpoints/
+.DS_Store

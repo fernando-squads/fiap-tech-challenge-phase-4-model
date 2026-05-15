@@ -1,0 +1,108 @@
+{
+  "name": "Unified",
+  "version": "1.0.0",
+  "created_at_utc": "2026-05-15T20:20:30.865708+00:00",
+  "columns": [
+    {
+      "name": "sample_id",
+      "dtype": "string",
+      "description": "Identificador unico e estavel da amostra no dataset unificado."
+    },
+    {
+      "name": "dataset_source",
+      "dtype": "string",
+      "description": "Nome do dataset de origem."
+    },
+    {
+      "name": "participant_id",
+      "dtype": "string",
+      "description": "Identificador do participante; usado para splits sem vazamento."
+    },
+    {
+      "name": "audio_path",
+      "dtype": "string",
+      "description": "Caminho relativo para o audio WAV mono 16 kHz PCM processado."
+    },
+    {
+      "name": "transcript",
+      "dtype": "string",
+      "description": "Transcricao textual associada a amostra, quando disponivel."
+    },
+    {
+      "name": "language",
+      "dtype": "string",
+      "description": "Idioma principal da amostra em tag BCP-47."
+    },
+    {
+      "name": "gender",
+      "dtype": "string",
+      "description": "Genero normalizado: female, male, non_binary, unknown ou nulo."
+    },
+    {
+      "name": "age",
+      "dtype": "float",
+      "description": "Idade do participante, quando disponivel."
+    },
+    {
+      "name": "phq_score",
+      "dtype": "float",
+      "description": "Pontuacao PHQ/PHQ-8/PHQ-9 normalizada como numero."
+    },
+    {
+      "name": "gad_score",
+      "dtype": "float",
+      "description": "Pontuacao GAD/GAD-7 normalizada como numero."
+    },
+    {
+      "name": "depression_label",
+      "dtype": "integer_nullable",
+      "description": "Rotulo binario de depressao: 1 positivo, 0 negativo."
+    },
+    {
+      "name": "anxiety_label",
+      "dtype": "integer_nullable",
+      "description": "Rotulo binario de ansiedade: 1 positivo, 0 negativo."
+    },
+    {
+      "name": "emotion_label",
+      "dtype": "string",
+      "description": "Rotulo emocional original ou normalizado, quando existir."
+    },
+    {
+      "name": "duration_seconds",
+      "dtype": "float",
+      "description": "Duracao do audio processado em segundos."
+    },
+    {
+      "name": "audio_embedding_path",
+      "dtype": "string",
+      "description": "Caminho relativo para embedding .npy extraido com WavLM."
+    },
+    {
+      "name": "text_embedding_path",
+      "dtype": "string",
+      "description": "Caminho relativo para embedding .npy extraido com MPNet."
+    }
+  ],
+  "label_conventions": {
+    "depression_label": {
+      "0": "negative",
+      "1": "positive"
+    },
+    "anxiety_label": {
+      "0": "negative",
+      "1": "positive"
+    }
+  },
+  "split_convention": "Splits sao gerados por participant_id para evitar data leakage.",
+  "audio_embedding_model": "microsoft/wavlm-large",
+  "text_embedding_model": "sentence-transformers/all-mpnet-base-v2",
+  "label_thresholds": {
+    "depression": {
+      "phq_score": 10
+    },
+    "anxiety": {
+      "gad_score": 10
+    }
+  }
+}

@@ -1,0 +1,153 @@
+project:
+  name: Unified Mental Health Dataset
+  random_seed: 42
+
+paths:
+  raw_root: raw
+  processed_root: processed
+  unified_root: unified
+
+audio:
+  sample_rate: 16000
+  channels: 1
+  codec: pcm_s16le
+  extensions:
+    - .wav
+    - .mp3
+    - .flac
+    - .m4a
+    - .mp4
+    - .ogg
+    - .webm
+    - .aac
+
+splits:
+  train_size: 0.70
+  validation_size: 0.15
+  test_size: 0.15
+  stratify_by: depression_label
+
+embeddings:
+  audio:
+    model_name: microsoft/wavlm-large
+    max_chunk_seconds: 30
+  text:
+    model_name: sentence-transformers/all-mpnet-base-v2
+    batch_size: 16
+
+label_thresholds:
+  depression:
+    phq_score: 10
+  anxiety:
+    gad_score: 10
+
+datasets:
+  womanhealthfiap:
+    source_name: WomanHealthFIAP
+    raw_dir: raw/womanhealthfiap
+    language: pt-BR
+    download:
+      source_type: huggingface_dataset
+      url: https://huggingface.co/datasets/brunoretiro/womanhealthfiap
+      hf_dataset_name: brunoretiro/womanhealthfiap
+      hf_data_dir:
+      load_dataset_example: 'load_dataset("brunoretiro/womanhealthfiap")'
+      filename:
+      sha256:
+      md5:
+      extract: true
+      auth_token_env:
+      expected_files:
+        - dataset_pacientes.csv
+        - dataset_pacientes.json
+        - audios/*.mp3
+      manual_instructions: "Dataset publico no Hugging Face. O downloader usa snapshot_download em brunoretiro/womanhealthfiap."
+    audio_globs:
+      - "**/*.wav"
+      - "**/*.mp3"
+      - "**/*.flac"
+      - "**/*.m4a"
+    metadata_globs:
+      - "**/*.csv"
+      - "**/*.tsv"
+      - "**/*.xlsx"
+      - "**/*.json"
+    transcript_globs:
+      - "**/*transcript*.txt"
+      - "**/*transcript*.csv"
+      - "**/*transcription*.txt"
+      - "**/*.cha"
+
+  eatd:
+    source_name: EATD-Corpus
+    raw_dir: raw/eatd
+    language: zh-CN
+    label_rules:
+      depression_score_threshold: 53
+      score_files:
+        - new_label.txt
+        - label.txt
+    download:
+      source_type: manual_huggingface_loader
+      url: https://github.com/speechandlanguageprocessing/ICASSP2022-Depression
+      hf_dataset_name: jimregan/eatd_corpus
+      hf_data_dir: raw/eatd/EATD-Corpus
+      load_dataset_example: 'load_dataset("jimregan/eatd_corpus", data_dir="raw/eatd/EATD-Corpus", trust_remote_code=True)'
+      filename:
+      sha256:
+      md5:
+      extract: true
+      auth_token_env:
+      expected_files:
+        - EATD-Corpus/t_*/*.wav
+        - EATD-Corpus/v_*/*.wav
+        - EATD-Corpus/t_*/positive.txt
+        - EATD-Corpus/v_*/positive.txt
+        - EATD-Corpus/t_*/label.txt
+        - EATD-Corpus/v_*/new_label.txt
+      manual_instructions: "O loader publico esta em jimregan/eatd_corpus, mas requer o corpus local. Baixe o EATD-Corpus pelo repositorio oficial, extraia em raw/eatd/EATD-Corpus e use load_dataset(\"jimregan/eatd_corpus\", data_dir=\"raw/eatd/EATD-Corpus\", trust_remote_code=True)."
+    audio_globs:
+      - "**/*.wav"
+      - "**/*.mp3"
+      - "**/*.flac"
+    metadata_globs:
+      - "**/*.csv"
+      - "**/*.tsv"
+      - "**/*.xlsx"
+      - "**/*.json"
+    transcript_globs:
+      - "**/*.txt"
+      - "**/*transcript*.csv"
+
+  emu:
+    source_name: EMU
+    raw_dir: raw/emu
+    language: en-US
+    download:
+      source_type: github_archive
+      url: https://github.com/mltlachac/EMU/archive/refs/heads/master.zip
+      hf_dataset_name:
+      hf_data_dir:
+      load_dataset_example:
+      filename: emu-master.zip
+      sha256:
+      md5:
+      extract: true
+      auth_token_env:
+      expected_files:
+        - "**/EMU_data/audio_raw/**/*.WAV"
+        - "**/EMU_data/audio_features/**/*.csv"
+      manual_instructions: "Partes publicas do EMU estao no GitHub mltlachac/EMU. O downloader baixa o arquivo master.zip e extrai em raw/emu."
+    audio_globs:
+      - "**/*.wav"
+      - "**/*.mp3"
+      - "**/*.flac"
+    metadata_globs:
+      - "**/*.csv"
+      - "**/*.tsv"
+      - "**/*.xlsx"
+      - "**/*.json"
+    transcript_globs:
+      - "**/*transcript*.txt"
+      - "**/*transcript*.csv"
+      - "**/*.txt"
