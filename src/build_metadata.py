@@ -71,6 +71,10 @@ def main() -> None:
                 "gad_score",
                 "depression_label",
                 "anxiety_label",
+                "voice_risk_label",
+                "postpartum_depression_label",
+                "hormonal_fatigue_label",
+                "domestic_violence_label",
                 "emotion_label",
             ]
         ],

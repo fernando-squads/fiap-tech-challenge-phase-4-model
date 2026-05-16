@@ -151,3 +151,88 @@ datasets:
       - "**/*transcript*.txt"
       - "**/*transcript*.csv"
       - "**/*.txt"
+
+  voice_risk_training:
+    source_name: VoiceRiskTraining
+    raw_dir: raw/voice_risk_training
+    language: pt-BR
+    download:
+      source_type: manual
+      url:
+      hf_dataset_name:
+      hf_data_dir:
+      load_dataset_example:
+      filename:
+      sha256:
+      md5:
+      extract: true
+      auth_token_env:
+      expected_files:
+        - metadata.csv
+        - audio/*
+      manual_instructions: "Gere este dataset com python src/build_voice_risk_dataset.py. O script materializa raw/voice_risk_training/metadata.csv e raw/voice_risk_training/audio/."
+    audio_globs:
+      - "audio/*.wav"
+      - "audio/*.mp3"
+      - "audio/*.flac"
+      - "audio/*.m4a"
+    metadata_globs:
+      - "metadata.csv"
+    transcript_globs: []
+    column_aliases:
+      voice_risk_label:
+        - voice_risk_label
+        - binary_risk
+      anxiety_label:
+        - anxiety_label
+        - anxiety
+      postpartum_depression_label:
+        - postpartum_depression_label
+        - postpartum_depression
+      hormonal_fatigue_label:
+        - hormonal_fatigue_label
+        - hormonal_fatigue
+      domestic_violence_label:
+        - domestic_violence_label
+        - domestic_violence
+
+  voice_risk_synthetic:
+    source_name: VoiceRiskSynthetic
+    raw_dir: raw/voice_risk_synthetic
+    language: pt-BR
+    download:
+      source_type: manual
+      url:
+      hf_dataset_name:
+      hf_data_dir:
+      load_dataset_example:
+      filename:
+      sha256:
+      md5:
+      extract: true
+      auth_token_env:
+      expected_files:
+        - metadata.csv
+        - audio/*.wav
+      manual_instructions: "Gere este dataset com python src/generate_voice_risk_synthetic_data.py. O script materializa raw/voice_risk_synthetic/metadata.csv e raw/voice_risk_synthetic/audio/."
+    audio_globs:
+      - "audio/*.wav"
+    metadata_globs:
+      - "metadata.csv"
+    transcript_globs: []
+    column_aliases:
+      voice_risk_label:
+        - voice_risk_label
+        - binary_risk
+      anxiety_label:
+        - anxiety_label
+        - anxiety
+      postpartum_depression_label:
+        - postpartum_depression_label
+        - postpartum_depression
+      hormonal_fatigue_label:
+        - hormonal_fatigue_label
+        - hormonal_fatigue
+      domestic_violence_label:
+        - domestic_violence_label
+        - domestic_violence

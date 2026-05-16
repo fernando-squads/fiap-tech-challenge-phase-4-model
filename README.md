@@ -1,17 +1,27 @@
-# Unified Mental Health Dataset
+# Unificador de dataset's e treinador de modelos
 
-Projeto Python para construir um dataset unificado chamado **Unified**, combinando WomanHealthFIAP, EATD-Corpus e EMU para tarefas de deteccao de depressao e ansiedade com voz, texto e metadados.
+Projeto Python para construir, unificar e treinar modelos sobre datasets de saude mental baseados em voz, texto e metadados.
 
-O repositorio **nao inclui datasets reais**. Coloque os arquivos originais manualmente em `raw/` antes de executar o pipeline.
+O fluxo real do projeto e:
+
+1. Baixar ou localizar os datasets brutos configurados em `config/datasets.yaml`.
+2. Processar os datasets baixados, gerar datasets derivados de voice risk e materializar tudo em um formato bruto padronizado.
+3. Unificar os dados processados no dataset **Unified**, com splits por `participant_id` para evitar data leakage.
+4. Treinar modelos usando o dataset unificado e os embeddings extraidos.
+5. Mostrar como carregar o modelo treinado em outro projeto para inferencia.
+
+O repositorio **nao versiona datasets reais, embeddings, Parquets finais nem modelos treinados**. Esses artefatos sao gerados localmente dentro de `raw/`, `processed/` e `unified/`.
 
 ## Estrutura
 
 ```text
-mental-health-dataset/
+fiap-tech-challenge-phase-4-model/
 |-- raw/
 |   |-- womanhealthfiap/
 |   |-- eatd/
-|   `-- emu/
+|   |-- emu/
+|   |-- voice_risk_training/
+|   `-- voice_risk_synthetic/
 |-- processed/
 |   |-- audio/
 |   |-- transcripts/
@@ -30,6 +40,20 @@ mental-health-dataset/
 `-- README.md
 ```
 
+## Datasets
+
+O projeto trabalha com estas fontes:
+
+| Dataset | Origem | Papel no pipeline |
+| --- | --- | --- |
+| `WomanHealthFIAP` | Hugging Face `brunoretiro/womanhealthfiap` | Dataset real baixado para `raw/womanhealthfiap/`. |
+| `EATD-Corpus` | Corpus externo referenciado pelo loader `jimregan/eatd_corpus` | Dataset real que exige arquivos locais em `raw/eatd/EATD-Corpus/`. |
+| `EMU` | GitHub `mltlachac/EMU` | Dataset real baixado e extraido em `raw/emu/`. |
+| `VoiceRiskTraining` | Gerado por `src/build_voice_risk_dataset.py` | Dataset derivado local para treino de risco de voz, materializado em `raw/voice_risk_training/`. |
+| `VoiceRiskSynthetic` | Gerado por `src/generate_voice_risk_synthetic_data.py` | Dataset sintetico de desenvolvimento, materializado em `raw/voice_risk_synthetic/`. |
+
+`MODMA` e `DAIC-WOZ` foram removidos da configuracao porque nao fazem parte do escopo atual do projeto.
+
 ## Schema Universal
 
 As saidas `unified/train.parquet`, `unified/validation.parquet` e `unified/test.parquet` seguem estas colunas:
@@ -47,20 +71,24 @@ phq_score
 gad_score
 depression_label
 anxiety_label
+voice_risk_label
+postpartum_depression_label
+hormonal_fatigue_label
+domestic_violence_label
 emotion_label
 duration_seconds
 audio_embedding_path
 text_embedding_path
 ```
 
-Labels binarios usam `1` para positivo e `0` para negativo. Quando nao ha label explicito, o pipeline usa os limiares configurados em `config/datasets.yaml`: `phq_score >= 10` para depressao e `gad_score >= 10` para ansiedade.
+Labels binarios usam `1` para positivo e `0` para negativo. Quando nao ha label explicito, o pipeline usa os limiares configurados em `config/datasets.yaml`: `phq_score >= 10` para depressao e `gad_score >= 10` para ansiedade. Os campos `voice_risk_label`, `postpartum_depression_label`, `hormonal_fatigue_label` e `domestic_violence_label` sao preservados para treinos de voice risk.
 
 ## Instalacao
 
 Recomendado usar ambiente virtual.
 
 ```bash
-cd mental-health-dataset
+cd fiap-tech-challenge-phase-4-model
 python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
@@ -120,12 +148,85 @@ Tipos suportados em `source_type`:
 - `manual_huggingface_loader`: registra um loader do Hugging Face que exige `data_dir` local, como EATD-Corpus.
 - `restricted_portal`: registra portal de acesso com EULA/login, caso algum dataset futuro exija isso.
 
-## Execucao do Pipeline
+## Execucao Completa
 
-Execute a partir da pasta `mental-health-dataset/`.
+Execute os comandos a partir da raiz do repositorio.
+
+### 0. Limpar Artefatos Gerados
+
+Quando quiser rodar o pipeline do zero, limpe os artefatos gerados pelas etapas de processamento, unificacao e treino:
+
+```bash
+python src/clean_generated_data.py --dry-run
+python src/clean_generated_data.py --yes
+```
+
+O `--dry-run` mostra o que seria removido sem apagar nada. O `--yes` confirma a remocao.
+
+Esse script remove:
+
+- `raw/voice_risk_training/` e `raw/voice_risk_synthetic/`, que sao datasets raw gerados localmente;
+- `processed/voice_risk/`;
+- audios processados em `processed/audio/`;
+- transcricoes, metadados, labels, manifestos e splits em `processed/`;
+- embeddings em `processed/embeddings/`;
+- modelos e metricas em `processed/models/`;
+- Parquets finais e `schema.json` em `unified/`.
+
+Ele preserva os datasets reais baixados ou colocados manualmente em `raw/womanhealthfiap/`, `raw/eatd/` e `raw/emu/`, alem dos arquivos `.gitkeep`. Para preservar tambem os datasets raw gerados de voice risk, use:
+
+```bash
+python src/clean_generated_data.py --yes --keep-voice-risk-raw
+```
+
+### 1. Baixar Datasets
+
+Primeiro o projeto tenta baixar ou localizar os datasets configurados:
 
 ```bash
 python src/download_datasets.py
+```
+
+O downloader verifica `raw/<dataset>` antes de baixar. Quando o dataset ja existe e contem os arquivos esperados, ele nao baixa novamente.
+
+Comportamento por dataset:
+
+- `womanhealthfiap`: baixado via Hugging Face com `snapshot_download`.
+- `emu`: baixado como arquivo `.zip` publico do GitHub e extraido em `raw/emu/`.
+- `eatd`: registrado como fonte manual, porque o loader publico exige o `EATD-Corpus` local em `raw/eatd/EATD-Corpus/`.
+- `voice_risk_training` e `voice_risk_synthetic`: nao sao baixados da internet; sao gerados pelos scripts locais da etapa seguinte.
+
+Tambem e possivel baixar apenas um dataset:
+
+```bash
+python src/download_datasets.py --dataset womanhealthfiap
+```
+
+### 2. Gerar Datasets Derivados
+
+Depois do download, o projeto gera os datasets locais de voice risk. Eles entram no Unified como qualquer outro dataset porque tambem sao materializados em `raw/`.
+
+```bash
+python src/build_voice_risk_dataset.py
+python src/generate_voice_risk_synthetic_data.py
+```
+
+Esses comandos geram:
+
+- `processed/voice_risk/training_dataset.csv`
+- `processed/voice_risk/synthetic_dataset.csv`
+- `raw/voice_risk_training/metadata.csv`
+- `raw/voice_risk_training/audio/`
+- `raw/voice_risk_synthetic/metadata.csv`
+- `raw/voice_risk_synthetic/audio/`
+
+O dataset sintetico e util para desenvolvimento e validacao do fluxo, mas nao substitui dados reais em avaliacao clinica ou producao.
+
+### 3. Processar e Unificar
+
+Com os dados brutos e derivados disponiveis, execute o pipeline de processamento:
+
+```bash
 python src/validate_raw_files.py
 python src/prepare_audio.py
 python src/build_metadata.py
@@ -133,20 +234,48 @@ python src/extract_audio_embeddings.py
 python src/extract_text_embeddings.py
 python src/create_splits.py
 python src/export_unified_dataset.py
-python src/train_multimodal_transformer.py
 ```
+
+Essa etapa faz a padronizacao de audio, metadados, labels, embeddings e splits. Ao final, o dataset unificado fica em:
+
+- `unified/train.parquet`
+- `unified/validation.parquet`
+- `unified/test.parquet`
+- `unified/schema.json`
 
 Tambem e possivel processar um dataset por vez:
 
 ```bash
-python src/download_datasets.py --dataset womanhealthfiap
+python src/validate_raw_files.py --dataset womanhealthfiap
 python src/prepare_audio.py --dataset womanhealthfiap
 python src/build_metadata.py --dataset womanhealthfiap
 ```
 
-## O que Cada Etapa Faz
+### 4. Treinar Modelos
 
-`download_datasets.py` usa `DatasetDownloader` para verificar `raw/<dataset>`, baixar fontes diretas ou datasets do Hugging Face quando possivel, validar `sha256`/`md5` opcionais e extrair pacotes `.zip`/`.tar`.
+Apos a unificacao, treine os modelos conforme o objetivo do experimento:
+
+```bash
+python src/train_baseline.py
+python src/train_multimodal_transformer.py
+python src/train_voice_risk.py
+```
+
+`train_baseline.py` e `train_multimodal_transformer.py` usam os Parquets do Unified e os embeddings extraidos. `train_voice_risk.py` usa o CSV supervisionado `processed/voice_risk/training_dataset.csv`, gerado na etapa de datasets derivados.
+
+### 5. Usar o Modelo Treinado
+
+Depois do treino, use os artefatos salvos em `processed/models/`. A secao [Usar o Modelo em Outro Projeto](#usar-o-modelo-em-outro-projeto) mostra um exemplo de inferencia carregando o checkpoint do transformer multimodal em outro codigo Python.
+
+## O Que Cada Etapa Faz
+
+`download_datasets.py` usa `DatasetDownloader` para verificar `raw/<dataset>`, baixar fontes diretas, arquivos do GitHub ou datasets do Hugging Face quando possivel, validar `sha256`/`md5` opcionais e extrair pacotes `.zip`/`.tar`.
+
+`clean_generated_data.py` remove artefatos locais gerados pelo pipeline, preservando datasets reais baixados/manualizados em `raw/` e arquivos `.gitkeep`.
+
+`build_voice_risk_dataset.py` gera o CSV supervisionado de voice risk a partir das fontes locais aprovadas e materializa `raw/voice_risk_training/` para que ele entre no Unified.
+
+`generate_voice_risk_synthetic_data.py` gera dados sinteticos de desenvolvimento para voice risk e materializa `raw/voice_risk_synthetic/`.
 
 `validate_raw_files.py` gera `processed/metadata/raw_validation_report.json` com contagens e erros basicos.
 
@@ -164,11 +293,23 @@ Audios invalidos ou vazios sao ignorados por padrao e registrados em `processed/
 
 `export_unified_dataset.py` exporta os Parquets finais em `unified/` e atualiza `unified/schema.json`.
 
+`train_baseline.py` treina um baseline classico com scikit-learn usando embeddings extraidos.
+
 `train_multimodal_transformer.py` treina um transformer multimodal de fusao sobre tokens de audio, texto e metadados derivados dos embeddings extraidos.
 
-## Baseline de Treino
+`train_voice_risk.py` treina e exporta os modelos `binary_risk_model.joblib` e `multilabel_risk_model.joblib` consumidos pela API FastAPI.
 
-Depois de gerar embeddings e exportar o dataset:
+## Treinamento dos Modelos
+
+Depois de exportar o dataset unificado, o projeto pode treinar tres familias de modelos:
+
+- baseline classico com scikit-learn para `depression_label`;
+- transformer multimodal com PyTorch para `depression_label`, `anxiety_label` ou `voice_risk_label`;
+- modelos especificos de voice risk usados pela API externa.
+
+### Baseline Classico
+
+Treina uma regressao logistica sobre embeddings ja extraidos:
 
 ```bash
 python src/train_baseline.py
@@ -189,7 +330,13 @@ python src/train_baseline.py --features audio,text
 
 Com `--features auto`, o script escolhe a modalidade ou combinacao com maior sobreposicao real entre embeddings existentes e labels nos splits de treino e validacao.
 
-## Multimodal Transformer
+### Multimodal Transformer
+
+Depois do baseline classico, treine o transformer multimodal sobre os mesmos embeddings exportados:
+
+```bash
+python src/train_multimodal_transformer.py
+```
 
 O treino multimodal usa os embeddings congelados como tokens de entrada:
 
@@ -200,18 +347,13 @@ O treino multimodal usa os embeddings congelados como tokens de entrada:
 - `TransformerEncoder` para fusao;
 - cabeca binaria para `depression_label`.
 
-Comando padrao:
-
-```bash
-python src/train_multimodal_transformer.py
-```
-
 Exemplos:
 
 ```bash
 python src/train_multimodal_transformer.py --modalities audio,text
 python src/train_multimodal_transformer.py --modalities audio,text,metadata
 python src/train_multimodal_transformer.py --target anxiety_label --modalities audio,text
+python src/train_multimodal_transformer.py --target voice_risk_label --modalities audio,text
 python src/train_multimodal_transformer.py --epochs 50 --batch-size 16 --d-model 384 --num-layers 3
 ```
 
@@ -222,6 +364,70 @@ Artefatos:
 - `processed/models/multimodal_transformer/training_config.json`
 
 Esse modelo treina a fusao multimodal. WavLM e MPNet continuam congelados como extratores de embeddings; para fine-tuning end-to-end, seria necessario adicionar um treino que carregue audio/texto bruto diretamente.
+
+### Modelos Voice Risk Para A API
+
+Este repositorio tambem concentra o treinamento dos modelos consumidos pela API `/Users/fernando/development/repo/fiap-tech-challenge-phase-4`.
+
+Para gerar o dataset supervisionado a partir das fontes locais aprovadas:
+
+```bash
+python src/build_voice_risk_dataset.py
+```
+
+Saidas:
+
+- `processed/voice_risk/training_dataset.csv`
+- `processed/voice_risk/training_dataset_build_report.md`
+- `raw/voice_risk_training/metadata.csv`
+- `raw/voice_risk_training/audio/`
+
+Para gerar dados sinteticos apenas em desenvolvimento:
+
+```bash
+python src/generate_voice_risk_synthetic_data.py
+```
+
+Saidas sinteticas:
+
+- `processed/voice_risk/synthetic_dataset.csv`
+- `raw/voice_risk_synthetic/metadata.csv`
+- `raw/voice_risk_synthetic/audio/`
+
+Para treinar os modelos binario e multilabel:
+
+```bash
+python src/train_voice_risk.py
+```
+
+Como os artefatos `joblib` dependem da versao do `scikit-learn`, gere os modelos voice-risk com uma versao compativel com a API consumidora. No ambiente local atual, a geracao compativel foi validada usando o Python da API:
+
+```bash
+PYTHONPATH=src /caminho/do/seu/projeto/.venv/bin/python \
+  src/train_voice_risk.py \
+  --dataset processed/voice_risk/training_dataset.csv \
+  --output-dir processed/models/voice_risk
+```
+
+Artefatos:
+
+- `processed/models/voice_risk/binary_risk_model.joblib`
+- `processed/models/voice_risk/multilabel_risk_model.joblib`
+- `processed/models/voice_risk/voice_risk_metrics.json`
+
+O CSV de treino deve conter:
+
+```text
+audio_path
+transcription
+binary_risk
+anxiety
+postpartum_depression
+hormonal_fatigue
+domestic_violence
+```
+
+Por padrao, o treino exige arquivos de audio existentes. Para experimentos sem audio, use `--allow-missing-audio`; essa opcao nao deve ser usada para modelos de producao.
 
 ## Usar o Modelo em Outro Projeto
 
@@ -305,6 +511,27 @@ batch["text_present"] = torch.tensor([False])
 ```
 
 Para gerar os embeddings no projeto consumidor, reutilize a mesma logica de `src/extract_audio_embeddings.py` e `src/extract_text_embeddings.py`. O modelo multimodal espera vetores ja extraidos; ele nao recebe audio bruto nem texto bruto diretamente.
+
+## Copiar Modelos Para A API
+
+A copia dos artefatos treinados para a API e manual nesta etapa:
+
+```bash
+cp processed/models/voice_risk/binary_risk_model.joblib \
+  /caminho/do/seu/projeto/artifacts/models/binary_risk_model.joblib
+
+cp processed/models/voice_risk/multilabel_risk_model.joblib \
+  /caminho/do/seu/projeto/artifacts/models/multilabel_risk_model.joblib
+
+cp processed/models/multimodal_transformer/model.pt \
+  /caminho/do/seu/projeto/artifacts/models/mental_health/multimodal_transformer/model.pt
+
+cp processed/models/multimodal_transformer/training_config.json \
+  /caminho/do/seu/projeto/artifacts/models/mental_health/multimodal_transformer/training_config.json
+
+cp processed/models/multimodal_transformer/metrics.json \
+  /caminho/do/seu/projeto/artifacts/models/mental_health/multimodal_transformer/metrics.json
+```
 
 ## Boas Praticas de Dados
 

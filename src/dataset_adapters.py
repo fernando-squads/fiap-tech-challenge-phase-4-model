@@ -23,6 +23,7 @@ from labels import (
     missing,
     normalize_gender,
     parse_float,
+    parse_int_label,
     standardize_binary_label,
 )
 
@@ -98,6 +99,7 @@ DEFAULT_COLUMN_ALIASES: dict[str, list[str]] = {
         "anxious",
         "gad_binary",
         "gad7_binary",
+        "anxiety",
         "anxiety_class",
     ],
     "emotion_label": ["emotion_label", "emotion", "sentiment", "affect", "mood"],
@@ -125,6 +127,9 @@ def build_sample_id(dataset_key: str, raw_path: Path, raw_root: Path) -> str:
 
 
 def infer_participant_id(raw_path: Path) -> str:
+    stem_prefix = raw_path.stem.split("_", 1)[0]
+    if re.fullmatch(r"[a-fA-F0-9]{8,}", stem_prefix):
+        return stem_prefix.lower()
     for part in reversed(raw_path.parts):
         if re.fullmatch(r"[tv]_\d+", part, flags=re.IGNORECASE):
             return part
@@ -174,7 +179,6 @@ def _identifier_tokens(value: Any) -> set[str]:
         normalize_column_name(text),
         normalize_column_name(path.name),
         normalize_column_name(path.stem),
-        normalize_column_name(path.parent.name),
         normalize_column_name(f"{path.parent.name}_{path.stem}"),
     }
     return {token for token in tokens if token}
@@ -225,6 +229,10 @@ def _table_has_metadata_signal(df: pd.DataFrame, aliases: dict[str, list[str]]) 
         "gad_score",
         "depression_label",
         "anxiety_label",
+        "voice_risk_label",
+        "postpartum_depression_label",
+        "hormonal_fatigue_label",
+        "domestic_violence_label",
         "emotion_label",
     }
     for target in metadata_targets:
@@ -395,7 +403,7 @@ class GenericDatasetAdapter:
 
         if audio_row is not None:
             sample_id = clean_text(audio_row.get("sample_id")) or sample_id
-            participant_id = clean_text(audio_row.get("participant_id")) or participant_id
+            participant_id = participant_id or clean_text(audio_row.get("participant_id"))
             audio_path = clean_text(audio_row.get("audio_path"))
             duration_seconds = parse_float(audio_row.get("duration_seconds"))
 
@@ -429,6 +437,12 @@ class GenericDatasetAdapter:
                 gad_score,
                 anxiety_threshold,
             ),
+            "voice_risk_label": parse_int_label(record.get("voice_risk_label")),
+            "postpartum_depression_label": parse_int_label(
+                record.get("postpartum_depression_label")
+            ),
+            "hormonal_fatigue_label": parse_int_label(record.get("hormonal_fatigue_label")),
+            "domestic_violence_label": parse_int_label(record.get("domestic_violence_label")),
             "emotion_label": clean_text(record.get("emotion_label")),
             "duration_seconds": duration_seconds,
             "audio_embedding_path": None,
@@ -472,6 +486,10 @@ class GenericDatasetAdapter:
                     "gad_score",
                     "depression_label",
                     "anxiety_label",
+                    "voice_risk_label",
+                    "postpartum_depression_label",
+                    "hormonal_fatigue_label",
+                    "domestic_violence_label",
                     "emotion_label",
                 )
             )

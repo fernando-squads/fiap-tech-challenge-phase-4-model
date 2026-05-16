@@ -44,6 +44,10 @@ def schema_payload(extra: dict[str, Any] | None = None) -> dict[str, Any]:
         "label_conventions": {
             "depression_label": {"0": "negative", "1": "positive"},
             "anxiety_label": {"0": "negative", "1": "positive"},
+            "voice_risk_label": {"0": "negative", "1": "positive"},
+            "postpartum_depression_label": {"0": "negative", "1": "positive"},
+            "hormonal_fatigue_label": {"0": "negative", "1": "positive"},
+            "domestic_violence_label": {"0": "negative", "1": "positive"},
         },
         "split_convention": "Splits sao gerados por participant_id para evitar data leakage.",
     }
@@ -54,4 +58,3 @@ def schema_payload(extra: dict[str, Any] | None = None) -> dict[str, Any]:
 
 def write_schema_json(path: Path, extra: dict[str, Any] | None = None) -> None:
     write_json(schema_payload(extra), path)
-
