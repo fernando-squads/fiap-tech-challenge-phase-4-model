@@ -52,8 +52,6 @@ O projeto trabalha com estas fontes:
 | `VoiceRiskTraining` | Gerado por `src/build_voice_risk_dataset.py` | Dataset derivado local para treino de risco de voz, materializado em `raw/voice_risk_training/`. |
 | `VoiceRiskSynthetic` | Gerado por `src/generate_voice_risk_synthetic_data.py` | Dataset sintetico de desenvolvimento, materializado em `raw/voice_risk_synthetic/`. |
 
-`MODMA` e `DAIC-WOZ` foram removidos da configuracao porque nao fazem parte do escopo atual do projeto.
-
 ## Schema Universal
 
 As saidas `unified/train.parquet`, `unified/validation.parquet` e `unified/test.parquet` seguem estas colunas:
