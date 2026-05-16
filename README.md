@@ -83,14 +83,19 @@ Labels binarios usam `1` para positivo e `0` para negativo. Quando nao ha label 
 
 ## Instalacao
 
-Recomendado usar ambiente virtual.
+Requer Python 3.10 ou superior.
+
+Recomendado usar ambiente virtual e conferir a versao antes de executar os scripts.
 
 ```bash
 cd fiap-tech-challenge-phase-4-model
-python -m venv .venv
+python3 -m venv .venv
 source .venv/bin/activate
+python --version
 pip install -r requirements.txt
 ```
+
+Se `python --version` mostrar versao menor que 3.10, recrie o ambiente com um Python mais novo.
 
 Para conversao de audio, instale `ffmpeg` no sistema quando possivel. Se `ffmpeg` nao estiver disponivel, o script tenta usar `torchaudio`.
 
@@ -256,10 +261,11 @@ Apos a unificacao, treine os modelos conforme o objetivo do experimento:
 ```bash
 python src/train_baseline.py
 python src/train_multimodal_transformer.py
+python src/train_anomaly_detector.py
 python src/train_voice_risk.py
 ```
 
-`train_baseline.py` e `train_multimodal_transformer.py` usam os Parquets do Unified e os embeddings extraidos. `train_voice_risk.py` usa o CSV supervisionado `processed/voice_risk/training_dataset.csv`, gerado na etapa de datasets derivados.
+`train_baseline.py`, `train_multimodal_transformer.py` e `train_anomaly_detector.py` usam os Parquets do Unified e os embeddings extraidos. `train_voice_risk.py` usa o CSV supervisionado `processed/voice_risk/training_dataset.csv`, gerado na etapa de datasets derivados.
 
 ### 5. Usar o Modelo Treinado
 
@@ -295,14 +301,17 @@ Audios invalidos ou vazios sao ignorados por padrao e registrados em `processed/
 
 `train_multimodal_transformer.py` treina um transformer multimodal de fusao sobre tokens de audio, texto e metadados derivados dos embeddings extraidos.
 
+`train_anomaly_detector.py` treina um detector nao supervisionado `IsolationForest` sobre embeddings multimodais, calibrando score e limiar de anomalia.
+
 `train_voice_risk.py` treina e exporta os modelos `binary_risk_model.joblib` e `multilabel_risk_model.joblib` consumidos pela API FastAPI.
 
 ## Treinamento dos Modelos
 
-Depois de exportar o dataset unificado, o projeto pode treinar tres familias de modelos:
+Depois de exportar o dataset unificado, o projeto pode treinar quatro familias de modelos:
 
 - baseline classico com scikit-learn para `depression_label`;
 - transformer multimodal com PyTorch para `depression_label`, `anxiety_label` ou `voice_risk_label`;
+- detector de anomalias nao supervisionado com `IsolationForest`;
 - modelos especificos de voice risk usados pela API externa.
 
 ### Baseline Classico
@@ -362,6 +371,39 @@ Artefatos:
 - `processed/models/multimodal_transformer/training_config.json`
 
 Esse modelo treina a fusao multimodal. WavLM e MPNet continuam congelados como extratores de embeddings; para fine-tuning end-to-end, seria necessario adicionar um treino que carregue audio/texto bruto diretamente.
+
+### Detector De Anomalias Nao Supervisionado
+
+Treina um `IsolationForest` sobre os embeddings do Unified para identificar amostras com comportamento multimodal fora do padrao observado no conjunto de treino. O treinamento nao usa labels como alvo; labels como `depression_label` podem ser usados apenas para avaliacao auxiliar das metricas.
+
+```bash
+python src/train_anomaly_detector.py
+```
+
+Por padrao, o detector usa audio e texto:
+
+- embedding WavLM de audio;
+- embedding MPNet de texto;
+- flags de presenca de cada modalidade;
+- score normalizado entre `0` e `1`;
+- limiar calibrado pela taxa `--contamination`.
+
+Exemplos:
+
+```bash
+python src/train_anomaly_detector.py --modalities audio,text
+python src/train_anomaly_detector.py --modalities audio,text,metadata
+python src/train_anomaly_detector.py --contamination 0.08
+python src/train_anomaly_detector.py --normal-label-column depression_label --normal-label-value 0
+```
+
+Artefatos:
+
+- `processed/models/anomaly_detector/anomaly_detector.joblib`
+- `processed/models/anomaly_detector/anomaly_metrics.json`
+- `processed/models/anomaly_detector/anomaly_config.json`
+
+O artefato `joblib` contem o pipeline scikit-learn, dimensoes de embeddings, colunas de metadados, blocos de features, limiar e calibracao do score. A API FastAPI usa esse arquivo para retornar `anomaly_prediction` e gerar alertas do tipo `anomaly`.
 
 ### Modelos Voice Risk Para A API
 
@@ -510,6 +552,36 @@ batch["text_present"] = torch.tensor([False])
 
 Para gerar os embeddings no projeto consumidor, reutilize a mesma logica de `src/extract_audio_embeddings.py` e `src/extract_text_embeddings.py`. O modelo multimodal espera vetores ja extraidos; ele nao recebe audio bruto nem texto bruto diretamente.
 
+Para usar o detector de anomalias em outro projeto, carregue o artefato `joblib` e monte o vetor na mesma ordem descrita em `feature_blocks`:
+
+```python
+import joblib
+import numpy as np
+
+
+artifact = joblib.load("processed/models/anomaly_detector/anomaly_detector.joblib")
+pipeline = artifact["pipeline"]
+
+audio_embedding = np.load("audio_embedding.npy").astype("float32")
+text_embedding = np.load("text_embedding.npy").astype("float32")
+
+vector = np.concatenate(
+    [
+        audio_embedding,
+        np.array([1.0], dtype="float32"),
+        text_embedding,
+        np.array([1.0], dtype="float32"),
+    ]
+)
+
+raw_score = -pipeline.decision_function([vector])[0]
+calibration = artifact["calibration"]
+score = (raw_score - calibration["raw_min"]) / (calibration["raw_max"] - calibration["raw_min"])
+score = float(np.clip(score, 0.0, 1.0))
+
+print({"anomaly_score": score, "anomaly_label": int(score >= artifact["threshold"])})
+```
+
 ## Copiar Modelos Para A API
 
 A copia dos artefatos treinados para a API e manual nesta etapa:
@@ -529,6 +601,15 @@ cp processed/models/multimodal_transformer/training_config.json \
 
 cp processed/models/multimodal_transformer/metrics.json \
   /caminho/do/seu/projeto/artifacts/models/mental_health/multimodal_transformer/metrics.json
+
+cp processed/models/anomaly_detector/anomaly_detector.joblib \
+  /caminho/do/seu/projeto/artifacts/models/anomaly_detector/anomaly_detector.joblib
+
+cp processed/models/anomaly_detector/anomaly_metrics.json \
+  /caminho/do/seu/projeto/artifacts/models/anomaly_detector/anomaly_metrics.json
+
+cp processed/models/anomaly_detector/anomaly_config.json \
+  /caminho/do/seu/projeto/artifacts/models/anomaly_detector/anomaly_config.json
 ```
 
 ## Boas Praticas de Dados

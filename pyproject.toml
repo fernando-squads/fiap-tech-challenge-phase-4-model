@@ -1,0 +1,6 @@
+[project]
+name = "fiap-tech-challenge-phase-4-model"
+version = "0.1.0"
+description = "Pipeline de datasets e modelos multimodais para triagem vocal em saude mental."
+requires-python = ">=3.10"
+

@@ -27,12 +27,13 @@ A solucao implementa monitoramento e triagem vocal para saude da mulher com foco
 - fadiga hormonal;
 - violencia domestica;
 - predicao multimodal de saude mental para `depression_label`;
+- deteccao nao supervisionada de anomalias multimodais;
 - explicabilidade baseada em termos textuais, indicadores acusticos e scores de modelos.
 
 O pipeline multimodal real e composto por duas trilhas:
 
-1. Trilha offline de treinamento: baixa datasets, normaliza audio/texto/metadados, gera embeddings com WavLM e MPNet, cria o dataset Unified, treina modelos scikit-learn e transformer multimodal.
-2. Trilha online de inferencia: recebe audio no frontend, envia para a API, transcreve com Whisper local, extrai features acusticas, calcula sinais NLP, executa modelos joblib e transformer multimodal, gera alertas e retorna resultado para exibicao.
+1. Trilha offline de treinamento: baixa datasets, normaliza audio/texto/metadados, gera embeddings com WavLM e MPNet, cria o dataset Unified, treina modelos scikit-learn, transformer multimodal e detector de anomalias.
+2. Trilha online de inferencia: recebe audio no frontend, envia para a API, transcreve com Whisper local, extrai features acusticas, calcula sinais NLP, executa modelos joblib, transformer multimodal e detector de anomalias, gera alertas e retorna resultado para exibicao.
 
 Componentes implementados de forma concreta:
 
@@ -45,9 +46,11 @@ Componentes implementados de forma concreta:
 - NLP heuristico para termos de medo, tristeza, exaustao, ansiedade, isolamento, coercao, violencia, inseguranca, pos-parto e sinais hormonais;
 - modelos scikit-learn binario e multilabel;
 - transformer multimodal PyTorch sobre embeddings congelados de audio/texto;
-- frontend com dashboards, cards de risco, graficos acusticos e paines de explicabilidade.
-- infraestrutura para ECS, CloudFront, S3;
-- monitoramento com CloudWatch.
+- detector nao supervisionado `IsolationForest` para anomalias multimodais;
+- frontend com dashboards, cards de risco, card de anomalia, graficos acusticos e paineis de explicabilidade;
+- integracao efetiva com S3 para storage temporario;
+- Dockerfile e orientacoes para ECS/Fargate;
+- infraestrutura CloudFront, IaC de ECS e monitoramento CloudWatch.
 
 # Visao Arquitetural
 
@@ -73,6 +76,7 @@ Backend FastAPI
   - NLP heuristico
   - modelos joblib
   - transformer multimodal
+  - detector de anomalias
   - geracao de alertas
   |
   | le artefatos treinados
@@ -83,6 +87,7 @@ Artifacts da API
   - mental_health/multimodal_transformer/model.pt
   - training_config.json
   - metrics.json
+  - anomaly_detector/anomaly_detector.joblib
   ^
   |
 Projeto de Modelos
@@ -91,7 +96,7 @@ Projeto de Modelos
   - normalizacao de metadados
   - embeddings WavLM e MPNet
   - dataset Unified
-  - treinamento scikit-learn e PyTorch
+  - treinamento scikit-learn, PyTorch e anomalia nao supervisionada
 ```
 
 Diagrama textual da comunicacao entre repositorios:
@@ -104,6 +109,7 @@ fiap-tech-challenge-phase-4-model
     processed/models/multimodal_transformer/model.pt
     processed/models/multimodal_transformer/training_config.json
     processed/models/multimodal_transformer/metrics.json
+    processed/models/anomaly_detector/anomaly_detector.joblib
   copia manualmente para:
     fiap-tech-challenge-phase-4/artifacts/models/
 
@@ -121,7 +127,7 @@ fiap-tech-challenge-phase-4-web
   envia:
     audio multipart/form-data
   renderiza:
-    transcricao, scores, alertas, evidencias e graficos
+    transcricao, scores, anomalia, alertas, evidencias e graficos
 ```
 
 # Introducao
@@ -193,6 +199,7 @@ Objetivos de MLOps implementados:
 2. Treinamento offline
    train_baseline.py
    train_multimodal_transformer.py
+   train_anomaly_detector.py
    train_voice_risk.py
 
 3. Publicacao manual dos artefatos
@@ -207,6 +214,7 @@ Objetivos de MLOps implementados:
 - O backend nao treina modelos. Ele falha com `503` quando artefatos obrigatorios nao existem ou sao incompativeis, exceto se fallback heuristico for explicitamente permitido.
 - O dataset Unified usa Parquet e schema universal, com splits por `participant_id` para reduzir data leakage.
 - O transformer multimodal usa embeddings pre-extraidos e congelados. Nao ha fine-tuning end-to-end de WavLM, MPNet ou Whisper.
+- A deteccao dedicada de anomalias usa `IsolationForest` nao supervisionado sobre embeddings WavLM/MPNet e metadados opcionais, com score calibrado no conjunto de treino.
 - O audio de inferencia e temporario. Mesmo quando enviado ao S3, o objeto e excluido ao final da requisicao.
 - O frontend tem modo mock configuravel por `VITE_USE_MOCK=true`, util para demonstracao sem backend.
 
@@ -304,6 +312,7 @@ Principais modulos:
 | `train_voice_risk.py` | Treinamento dos modelos joblib consumidos pela API |
 | `multimodal_transformer.py` | Arquitetura PyTorch do transformer multimodal |
 | `train_multimodal_transformer.py` | Treinamento do transformer multimodal |
+| `train_anomaly_detector.py` | Treinamento do detector nao supervisionado de anomalias |
 | `clean_generated_data.py` | Limpeza segura de artefatos gerados |
 
 Tecnologias e dependencias principais:
@@ -487,6 +496,7 @@ Funcionalidades implementadas:
 7. Treinamento
    train_baseline.py
    train_multimodal_transformer.py
+   train_anomaly_detector.py
    train_voice_risk.py
    -> processed/models
 ```
@@ -509,6 +519,7 @@ Backend
   -> executa modelo binario
   -> executa modelo multilabel
   -> executa transformer multimodal
+  -> executa detector de anomalias
   -> gera alertas
   -> remove S3/local temporario
   -> retorna JSON
@@ -558,7 +569,7 @@ Processamento:
 6. Upload para S3 quando `STORAGE_BACKEND=s3`.
 7. Transcricao Whisper.
 8. Extracao acustica com `librosa`.
-9. Embedding WavLM para o transformer multimodal.
+9. Embedding WavLM para o transformer multimodal e para o detector de anomalias.
 10. Exclusao do objeto S3 e do arquivo local temporario.
 
 Features acusticas extraidas:
@@ -623,7 +634,7 @@ Processamento:
    - hormonal.
 3. Calcula score textual por pesos e diversidade de categorias.
 4. Gera evidencias com termo, categoria e snippet.
-5. Para o transformer, gera embedding MPNet da transcricao.
+5. Para o transformer e para o detector de anomalias, gera embedding MPNet da transcricao.
 
 Saidas:
 
@@ -659,6 +670,7 @@ AnalyzeResponse
   binary_prediction
   multilabel_prediction
   mental_health_prediction
+  anomaly_prediction
   alerts
 ```
 
@@ -685,6 +697,10 @@ POST /audio/analyze
        gera WavLM e MPNet online
        carrega model.pt
        retorna probabilidade binaria
+  -> AnomalyModelService.predict
+       gera WavLM e MPNet online
+       carrega anomaly_detector.joblib
+       retorna score nao supervisionado
   -> AlertGenerator.generate
        aplica thresholds e justifica alertas
   -> cleanup_processed_audio
@@ -880,6 +896,62 @@ Estrategia de treinamento:
 - early stopping por ROC-AUC de validacao ou F1 quando ROC-AUC nao esta disponivel;
 - metricas: accuracy, F1, ROC-AUC e loss.
 
+## Detector nao supervisionado de anomalias
+
+Repositorios:
+
+- treinamento: `fiap-tech-challenge-phase-4-model`;
+- inferencia: `fiap-tech-challenge-phase-4`.
+
+Implementacao de treinamento:
+
+- `train_anomaly_detector.py`;
+- `IsolationForest`;
+- `StandardScaler`;
+- PCA opcional por `--pca-components`;
+- modalidades configuraveis por `--modalities audio,text,metadata`;
+- labels nao sao usadas como alvo de treinamento;
+- `depression_label` pode ser usado apenas como avaliacao auxiliar via `--target-eval-column`.
+
+Entrada offline:
+
+- `unified/train.parquet`;
+- `unified/validation.parquet`;
+- `unified/test.parquet`;
+- embeddings `.npy` de audio e texto;
+- metadados seguros opcionais, como `age` e `duration_seconds`.
+
+Saida offline:
+
+- `processed/models/anomaly_detector/anomaly_detector.joblib`;
+- `processed/models/anomaly_detector/anomaly_metrics.json`;
+- `processed/models/anomaly_detector/anomaly_config.json`.
+
+Formato do artefato:
+
+```text
+pipeline scikit-learn
+modalities
+embedding_dims
+metadata_columns
+metadata_fill_values
+feature_blocks
+feature_count
+threshold
+calibration.raw_min/raw_max
+contamination
+```
+
+Implementacao online:
+
+- `app/models/anomaly.py`;
+- `AnomalyModelService`;
+- gera embeddings WavLM/MPNet com a mesma logica do servico multimodal;
+- monta vetor na ordem dos `feature_blocks`;
+- calcula `raw_score = -decision_function`;
+- normaliza score para `0..1` usando calibracao do treino;
+- retorna `anomaly_prediction`.
+
 ## Modelos scikit-learn de voice risk
 
 Repositorio de treinamento: `fiap-tech-challenge-phase-4-model`.
@@ -938,9 +1010,12 @@ Saidas:
 
 # Estrategias de Deteccao de Anomalias
 
-A estrategia implementada trata anomalias como sinais de risco clinico/comportamental derivados de thresholds e modelos supervisionados.
+A estrategia implementada possui duas camadas complementares:
 
-Nao ha modelo dedicado de deteccao de anomalias nao supervisionada, como Isolation Forest, Autoencoder, One-Class SVM ou controle estatistico de drift.
+1. sinais supervisionados ou baseados em regra, usados para risco geral, categorias clinicas e justificativas;
+2. detector dedicado nao supervisionado, treinado com `IsolationForest` sobre embeddings multimodais e calibrado pelo conjunto de treino do Unified.
+
+O detector nao supervisionado nao aprende uma classe clinica especifica. Ele aprende o perfil estatistico das representacoes de audio/texto/metadados e sinaliza amostras distantes desse padrao. Portanto, `anomaly_prediction.score` deve ser interpretado como sinal de revisao humana, nao como diagnostico.
 
 Anomalias/sinais detectados no codigo:
 
@@ -952,6 +1027,7 @@ Anomalias/sinais detectados no codigo:
 | Fadiga hormonal | texto/acustica | multilabel + exaustao, hormonal, baixa energia |
 | Violencia domestica | texto/acustica | multilabel + violencia, coercao, medo, inseguranca |
 | Sinal de depressao/saude mental | WavLM + MPNet | transformer multimodal e threshold |
+| Anomalia multimodal | WavLM + MPNet + metadados opcionais | `IsolationForest` nao supervisionado e score calibrado |
 | Hesitacao | audio | pausas, silencio e pausa longa |
 | Baixa energia vocal | audio | `energy_mean <= LOW_ENERGY_THRESHOLD` |
 | Silencio elevado | audio | `silence_ratio >= 0.35` |
@@ -968,6 +1044,9 @@ multilabel_score >= MULTILABEL_RISK_THRESHOLD
 
 mental_health_probability >= MENTAL_HEALTH_THRESHOLD
   -> alerta depression_label ou target configurado
+
+anomaly_score >= ANOMALY_THRESHOLD ou threshold do artefato
+  -> alerta anomaly
 ```
 
 Severidade:
@@ -1047,6 +1126,7 @@ Campos principais de resposta:
 - `binary_prediction`;
 - `multilabel_prediction`;
 - `mental_health_prediction`;
+- `anomaly_prediction`;
 - `alerts`.
 
 Swagger/OpenAPI:
@@ -1086,6 +1166,7 @@ Componentes principais:
 | `AudioUpload.tsx` | Seleciona/arrasta arquivo e valida extensao local |
 | `AnalysisResult.tsx` | Compoe o resultado completo |
 | `BinaryRiskCard.tsx` | Exibe risco binario |
+| `AnomalyCard.tsx` | Exibe score do detector nao supervisionado |
 | `MultilabelScores.tsx` | Exibe categorias multilabel |
 | `AlertsPanel.tsx` | Exibe alertas e justificativas |
 | `ExplainabilityPanel.tsx` | Exibe evidencias textuais e acusticas |
@@ -1101,6 +1182,7 @@ Saida visual:
 - resumo do processamento;
 - transcricao;
 - probabilidade binaria;
+- score de anomalia;
 - scores por categoria;
 - alertas;
 - evidencias;
@@ -1131,6 +1213,7 @@ analyze_audio()
   binary_prediction = BinaryRiskModelService.predict(...)
   multilabel_prediction = MultilabelRiskModelService.predict(...)
   mental_health_prediction = MentalHealthModelService.predict(...)
+  anomaly_prediction = AnomalyModelService.predict(...)
   alerts = AlertGenerator.generate(...)
   storage.cleanup_processed_audio(saved_audio)
 ```
@@ -1147,12 +1230,14 @@ Configuracoes relevantes:
 | Modelos | `MODEL_DIR`, `REQUIRE_TRAINED_MODELS`, `ALLOW_HEURISTIC_MODEL_FALLBACK`, `BINARY_MODEL_FILENAME`, `MULTILABEL_MODEL_FILENAME` |
 | Thresholds | `BINARY_RISK_THRESHOLD`, `MULTILABEL_RISK_THRESHOLD`, `MEDIUM_SEVERITY_THRESHOLD`, `HIGH_SEVERITY_THRESHOLD`, `LOW_ENERGY_THRESHOLD`, `LONG_PAUSE_THRESHOLD_SECONDS` |
 | Saude mental | `MENTAL_HEALTH_MODEL_DIR`, `MENTAL_HEALTH_TARGET`, `MENTAL_HEALTH_THRESHOLD`, `MENTAL_HEALTH_DEVICE`, `MENTAL_HEALTH_AUDIO_EMBEDDING_MODEL`, `MENTAL_HEALTH_TEXT_EMBEDDING_MODEL`, `MENTAL_HEALTH_MAX_AUDIO_CHUNK_SECONDS` |
+| Anomalia | `ANOMALY_MODEL_DIR`, `ANOMALY_MODEL_FILENAME`, `ANOMALY_THRESHOLD`, `ANOMALY_REQUIRE_MODEL`, `ANOMALY_FEATURES` |
 
 Observacoes operacionais:
 
 - CORS esta configurado como `allow_origins=["*"]`;
 - nao ha autenticacao ou autorizacao no backend;
 - os modelos sao carregados a partir de arquivos locais;
+- o detector de anomalias e opcional por padrao e retorna `model_available=false` quando o artefato nao existe;
 - os modelos de embedding e Whisper usam cache local;
 - as rotas de treino nao existem, e os testes garantem que `/audio/train/*` nao aparece no OpenAPI.
 
@@ -1167,6 +1252,9 @@ Observacoes operacionais:
 | `model.pt` | `processed/models/multimodal_transformer/` | `artifacts/models/mental_health/multimodal_transformer/` |
 | `training_config.json` | `processed/models/multimodal_transformer/` | `artifacts/models/mental_health/multimodal_transformer/` |
 | `metrics.json` | `processed/models/multimodal_transformer/` | `artifacts/models/mental_health/multimodal_transformer/` |
+| `anomaly_detector.joblib` | `processed/models/anomaly_detector/` | `artifacts/models/anomaly_detector/` |
+| `anomaly_metrics.json` | `processed/models/anomaly_detector/` | `artifacts/models/anomaly_detector/` |
+| `anomaly_config.json` | `processed/models/anomaly_detector/` | `artifacts/models/anomaly_detector/` |
 
 ## Formato de inferencia
 
@@ -1190,6 +1278,18 @@ audio_path + transcription + duration
   -> MultimodalTransformerClassifier
   -> sigmoid(logits)
   -> label por threshold
+```
+
+Detector de anomalias:
+
+```text
+audio_path + transcription + duration
+  -> WavLM embedding
+  -> MPNet embedding
+  -> metadata opcional
+  -> IsolationForest.decision_function
+  -> score normalizado por calibracao do treino
+  -> label normal/anomalia por threshold
 ```
 
 # Seguranca e Privacidade
@@ -1296,6 +1396,12 @@ Metricas dos modelos voice risk:
 
 Importante: as metricas de voice risk foram calculadas sobre um dataset pequeno e supervisionado localmente, sem evidencia de holdout externo nesse script. Elas devem ser interpretadas como validacao tecnica do pipeline e nao como desempenho clinico.
 
+Metricas do detector de anomalias:
+
+- o codigo gera `processed/models/anomaly_detector/anomaly_metrics.json`;
+- as metricas incluem taxa de anomalia por split, quantis de score, linhas ignoradas e avaliacao auxiliar contra `depression_label` quando disponivel;
+- neste relatorio nao foi identificado um resultado real versionado desse treinamento, portanto os valores numericos devem ser gerados localmente com `python src/train_anomaly_detector.py`.
+
 # Exemplos de Anomalias Detectadas
 
 Os exemplos abaixo sao resultados esperados da implementacao com base nas regras, thresholds e modelos existentes. Eles nao sao diagnosticos.
@@ -1388,13 +1494,36 @@ Justificativas esperadas:
 - padrao de hesitacao elevado;
 - proporcao de silencio elevada.
 
+## Exemplo 6: anomalia multimodal nao supervisionada
+
+Entrada esperada:
+
+- audio e texto validos;
+- embedding de audio e/ou texto distante do padrao aprendido no Unified;
+- duracao ou metadados fora da faixa comum, quando a modalidade `metadata` foi usada no treino.
+
+Sinais detectaveis:
+
+- `anomaly_prediction.score` elevado;
+- `anomaly_prediction.label = "anomalia"` quando o score ultrapassa o limiar;
+- alerta `anomaly` gerado pela API;
+- frontend exibe `AnomalyCard` com score e disponibilidade do artefato.
+
+Alerta esperado:
+
+```text
+alert_type: anomaly
+severity: baixo/medio/alto conforme score
+message: Anomalia multimodal identificada para revisao humana.
+```
+
 # Conclusao
 
 Os tres repositorios formam uma arquitetura coerente para o escopo de triagem vocal multimodal:
 
 - o projeto de modelos entrega pipeline reproduzivel de dados, embeddings e treinamento;
-- o backend entrega inferencia multimodal operacional com FastAPI, S3 temporario, Whisper, features acusticas, NLP, modelos joblib e transformer;
-- o frontend entrega uma experiencia funcional de upload, visualizacao, alertas e explicabilidade.
+- o backend entrega inferencia multimodal operacional com FastAPI, S3 temporario, Whisper, features acusticas, NLP, modelos joblib, transformer e detector de anomalias;
+- o frontend entrega uma experiencia funcional de upload, visualizacao, score de anomalia, alertas e explicabilidade.
 
 A arquitetura ja contempla os principais blocos do desafio: analise de voz, processamento multimodal, geracao de alertas, suporte a decisao e integracao com AWS S3. Entretanto, alguns itens do contexto do desafio estao documentados ou seriam evolucoes arquiteturais, mas nao aparecem implementados no codigo analisado: CloudFront, IaC de ECS e monitoramento operacional completo.
 
