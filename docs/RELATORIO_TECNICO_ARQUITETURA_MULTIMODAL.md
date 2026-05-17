@@ -1,6 +1,6 @@
 # Relatorio Tecnico Corporativo: Arquitetura Multimodal de Saude da Mulher
 
-Data da analise: 2026-05-16  
+Data da analise: 2026-05-17
 Escopo analisado:
 
 - `https://github.com/fernando-squads/fiap-tech-challenge-phase-4-model`
@@ -8,6 +8,8 @@ Escopo analisado:
 - `https://github.com/fernando-squads/fiap-tech-challenge-phase-4-web`
 
 Este documento foi produzido a partir da leitura direta do codigo-fonte, configuracoes, READMEs, testes e artefatos locais encontrados nos tres repositorios. Quando uma capacidade e mencionada como nao implementada, isso significa que nao foi localizada no codigo analisado, mesmo que seja desejavel dentro do contexto do Tech Challenge.
+
+Observacao de nomenclatura: o backend e referenciado pelo nome atual do repositorio, `fiap-tech-challenge-phase-4-api`.
 
 # Resumo Executivo
 
@@ -49,10 +51,92 @@ Componentes implementados de forma concreta:
 - detector nao supervisionado `IsolationForest` para anomalias multimodais;
 - frontend com dashboards, cards de risco, card de anomalia, graficos acusticos e paineis de explicabilidade;
 - integracao efetiva com S3 para storage temporario;
-- Dockerfile e orientacoes para ECS/Fargate;
-- infraestrutura CloudFront, IaC de ECS e monitoramento CloudWatch.
+- deploy do frontend para bucket S3 por GitHub Actions, com bucket previsto como origem para CloudFront;
+- deploy da API para ECR/ECS Fargate por GitHub Actions;
+- `task-def.json` com configuracao Fargate, environment file em S3 e logs CloudWatch via `awslogs`;
+- Dockerfile da API com preload opcional do Whisper e caches de modelos configurados.
 
 # Visao Arquitetural
+
+Diagrama arquitetural unificado dos tres projetos:
+
+```mermaid
+flowchart LR
+  usuario["Usuario / profissional de saude"]
+
+  subgraph model["fiap-tech-challenge-phase-4-model"]
+    raw["raw/<br/>WomanHealthFIAP, EATD, EMU,<br/>VoiceRiskTraining, VoiceRiskSynthetic"]
+    processing["Pipeline offline<br/>download, validate, prepare_audio,<br/>build_metadata, embeddings, splits"]
+    unified["Unified Dataset<br/>train.parquet, validation.parquet,<br/>test.parquet, schema.json"]
+    training["Treinamento<br/>baseline, multimodal transformer,<br/>anomaly detector, voice risk"]
+    modelArtifacts["Artefatos gerados<br/>joblib, model.pt,<br/>metrics.json, configs"]
+  end
+
+  subgraph web["fiap-tech-challenge-phase-4-web"]
+    dashboard["React/Vite Dashboard<br/>upload, cards, alertas,<br/>anomalia, graficos"]
+    webWorkflow["GitHub Actions Web<br/>yarn build"]
+    webDist["dist/"]
+  end
+
+  subgraph api["fiap-tech-challenge-phase-4-api"]
+    routes["FastAPI<br/>GET /health<br/>POST /audio/analyze"]
+    storage["AudioStorageService<br/>validacao, temporario local,<br/>S3 upload/delete"]
+    inference["Pipeline online<br/>Whisper, acustica, NLP,<br/>joblib, transformer, anomalia"]
+    alerts["AlertGenerator<br/>severidade e justificativas"]
+    apiArtifacts["artifacts/models<br/>voice risk, transformer,<br/>anomaly_detector"]
+    docker["Dockerfile<br/>Python 3.12, ffmpeg,<br/>preload Whisper"]
+    taskDef["task-def.json<br/>Fargate, env file S3,<br/>awslogs"]
+    apiWorkflow["GitHub Actions API<br/>build, ECR push,<br/>ECS deploy"]
+  end
+
+  subgraph aws["AWS"]
+    s3Frontend["S3 static bucket<br/>fiap-tech-challenge-phase-4"]
+    cloudfront["CloudFront<br/>distribuicao externa ao repo"]
+    s3Audio["S3 audio temporario"]
+    s3Env["S3 environment file<br/>bdi-environment"]
+    ecr["Amazon ECR<br/>imagem da API"]
+    ecs["Amazon ECS Fargate<br/>service fiap-tech-challenge-phase-4-service<br/>cluster bdi-prd"]
+    logs["CloudWatch Logs<br/>/ecs/fiap-tech-challenge-phase-4-task"]
+  end
+
+  subgraph external["Servicos externos / modelos base"]
+    hf["Hugging Face Hub<br/>datasets, WavLM, MPNet"]
+    whisper["faster-whisper<br/>modelo local"]
+  end
+
+  usuario --> dashboard
+  dashboard -->|"multipart/form-data"| routes
+  routes --> storage
+  storage --> s3Audio
+  routes --> inference
+  inference --> whisper
+  inference --> hf
+  inference --> apiArtifacts
+  inference --> alerts
+  alerts --> routes
+  routes -->|"JSON AnalyzeResponse"| dashboard
+
+  hf --> raw
+  raw --> processing
+  processing --> unified
+  unified --> training
+  training --> modelArtifacts
+  modelArtifacts -->|"copia/publicacao manual"| apiArtifacts
+
+  webWorkflow --> webDist
+  webDist --> s3Frontend
+  s3Frontend --> cloudfront
+  cloudfront --> usuario
+
+  apiWorkflow --> docker
+  docker --> ecr
+  apiWorkflow --> taskDef
+  taskDef --> ecs
+  ecr --> ecs
+  s3Env --> ecs
+  ecs --> routes
+  ecs --> logs
+```
 
 Diagrama textual da arquitetura implementada:
 
@@ -111,7 +195,7 @@ fiap-tech-challenge-phase-4-model
     processed/models/multimodal_transformer/metrics.json
     processed/models/anomaly_detector/anomaly_detector.joblib
   copia manualmente para:
-    fiap-tech-challenge-phase-4/artifacts/models/
+    fiap-tech-challenge-phase-4-api/artifacts/models/
 
 fiap-tech-challenge-phase-4-api
   expoe:
@@ -154,6 +238,7 @@ Objetivos funcionais implementados:
 - calcular risco geral binario;
 - calcular scores multilabel para ansiedade, depressao pos-parto, fadiga hormonal e violencia domestica;
 - calcular predicao multimodal de saude mental com transformer treinado externamente;
+- calcular score nao supervisionado de anomalia multimodal;
 - gerar alertas com severidade e justificativas;
 - exibir resultados no frontend com cards, graficos e evidencias.
 
@@ -168,6 +253,7 @@ Objetivos de MLOps implementados:
 - criar splits por `participant_id`;
 - treinar baseline scikit-learn;
 - treinar transformer multimodal;
+- treinar detector nao supervisionado de anomalias;
 - treinar modelos voice risk para consumo pela API;
 - limpar artefatos gerados para reexecucao do pipeline.
 
@@ -220,7 +306,7 @@ Objetivos de MLOps implementados:
 
 # Arquitetura Multimodal
 
-A arquitetura multimodal possui duas formas de fusao:
+A arquitetura multimodal possui tres formas de fusao:
 
 1. Fusao tabular para modelos scikit-learn de voice risk:
    - features acusticas extraidas com `librosa`;
@@ -238,6 +324,16 @@ A arquitetura multimodal possui duas formas de fusao:
    - embeddings de modalidade;
    - `TransformerEncoder`;
    - cabeca binaria com `BCEWithLogitsLoss`.
+
+3. Fusao estatistica nao supervisionada para anomalias:
+   - embedding de audio WavLM;
+   - embedding de texto MPNet;
+   - flags de presenca por modalidade;
+   - metadados opcionais;
+   - `StandardScaler`;
+   - PCA opcional;
+   - `IsolationForest`;
+   - score calibrado no conjunto de treino.
 
 Fluxo multimodal offline:
 
@@ -260,6 +356,11 @@ Unified + embeddings
   -> MultimodalEmbeddingDataset
   -> MultimodalTransformerClassifier
   -> model.pt + metrics.json + training_config.json
+
+Unified + embeddings
+  -> matriz multimodal de anomalia
+  -> IsolationForest
+  -> anomaly_detector.joblib + anomaly_metrics.json + anomaly_config.json
 ```
 
 Fluxo multimodal online:
@@ -273,7 +374,9 @@ audio enviado pelo usuario
   -> metadata de duracao
   -> transformer multimodal carregado de artifacts/models
   -> mental_health_prediction
-  -> alerta se probabilidade >= threshold
+  -> detector de anomalias carregado de artifacts/models
+  -> anomaly_prediction
+  -> alertas se probabilidade/score >= threshold
 ```
 
 # Arquitetura dos Repositorios
@@ -288,6 +391,7 @@ Estrutura relevante:
 
 ```text
 config/datasets.yaml
+pyproject.toml
 raw/
 processed/
 unified/
@@ -317,7 +421,7 @@ Principais modulos:
 
 Tecnologias e dependencias principais:
 
-- Python;
+- Python 3.10+ declarado em `pyproject.toml`;
 - pandas, pyarrow, numpy, scipy;
 - scikit-learn, joblib;
 - PyTorch, torchaudio, transformers;
@@ -364,7 +468,9 @@ app/nlp/
 app/schemas/
 app/services/
 artifacts/models/
+.github/workflows/main.yml
 Dockerfile
+task-def.json
 requirements.txt
 tests/
 ```
@@ -381,9 +487,13 @@ Principais modulos:
 | `app/nlp/rules.py` | NLP heuristico |
 | `app/models/binary.py` | Inferencia binaria |
 | `app/models/multilabel.py` | Inferencia multilabel |
+| `app/models/anomaly.py` | Inferencia do detector nao supervisionado |
 | `app/services/mental_health.py` | Inferencia com transformer multimodal |
 | `app/alerts/rules.py` | Alertas e severidade |
 | `app/core/logging.py` | Logs estruturados JSON |
+| `.github/workflows/main.yml` | Build Docker, push para ECR e deploy ECS |
+| `task-def.json` | Task definition Fargate, variaveis, environment file S3 e CloudWatch Logs |
+| `Dockerfile` | Imagem Python 3.12, dependencias nativas, preload opcional do Whisper e Uvicorn |
 
 Tecnologias e dependencias principais:
 
@@ -429,6 +539,7 @@ src/utils/
 src/styles/global.css
 vite.config.ts
 package.json
+.github/workflows/main.yml
 ```
 
 Tecnologias e dependencias principais:
@@ -446,7 +557,8 @@ Funcionalidades implementadas:
 - validacao local de extensao `.wav`, `.mp3`, `.m4a`;
 - envio multipart para `POST /audio/analyze`;
 - modo mock por `VITE_USE_MOCK=true`;
-- exibicao de transcricao, metadados, score binario, scores multilabel, alertas, evidencias e graficos acusticos;
+- exibicao de transcricao, metadados, score binario, score de anomalia, scores multilabel, alertas, evidencias e graficos acusticos;
+- build e deploy do conteudo estatico de `dist/` para S3 via `.github/workflows/main.yml`;
 - proxy local do Vite para contornar CORS em desenvolvimento.
 
 # Fluxo de Dados
@@ -525,7 +637,7 @@ Backend
   -> retorna JSON
 
 Frontend
-  -> renderiza resultado, evidencias, alertas e graficos
+  -> renderiza resultado, anomalia, evidencias, alertas e graficos
 ```
 
 # Fluxo de Audio
@@ -720,9 +832,16 @@ Tratamento de erros:
 
 # Integracao com AWS
 
+A integracao AWS aparece em duas camadas:
+
+- runtime da API, com S3 para audio temporario;
+- pipelines de deploy, com S3 para frontend estatico, ECR/ECS Fargate para backend e CloudWatch Logs configurado na task definition.
+
 ## S3
 
-S3 e a integracao AWS efetivamente implementada no codigo.
+S3 e usado em dois fluxos distintos.
+
+No backend, S3 e usado como armazenamento temporario de audio durante `/audio/analyze`.
 
 Variaveis relevantes:
 
@@ -750,9 +869,39 @@ audio local temporario
 
 O backend exige `s3:PutObject` e `s3:DeleteObject` no prefixo configurado. O codigo nao implementa leitura posterior do objeto S3, porque o processamento usa o arquivo local temporario.
 
+No frontend, o workflow `.github/workflows/main.yml` executa build com Node 20 e publica o conteudo de `dist/` no bucket:
+
+```text
+s3://fiap-tech-challenge-phase-4/
+```
+
+Esse bucket e o ponto versionado no projeto para hospedagem estatica e pode ser usado como origem de uma distribuicao CloudFront.
+
 ## ECS/Fargate
 
-Existe Dockerfile para o backend:
+O backend possui deploy versionado para ECS Fargate por `.github/workflows/main.yml`.
+
+Fluxo do workflow:
+
+```text
+push master
+  -> configure-aws-credentials
+  -> amazon-ecr-login
+  -> docker build
+  -> docker push para ECR
+  -> amazon-ecs-render-task-definition
+  -> amazon-ecs-deploy-task-definition
+```
+
+Parametros observados:
+
+- repositorio ECR: `fiap-tech-challenge-phase-4`;
+- service ECS: `fiap-tech-challenge-phase-4-service`;
+- cluster ECS: `bdi-prd`;
+- task definition base: `task-def.json`;
+- container name: `fiap-tech-challenge-phase-4`.
+
+O Dockerfile da API:
 
 ```text
 python:3.12-slim
@@ -761,13 +910,47 @@ instala requirements
 executa uvicorn em 0.0.0.0:8090
 ```
 
-O README descreve uso em ECS/Fargate com storage efemero em `/tmp/voice-risk-screening-api`.
+O Dockerfile tambem define caches temporarios para Hugging Face, sentence-transformers e Whisper, expoe a porta `8090` e pode fazer preload do modelo Whisper em `/opt/models/whisper`.
+
+O `task-def.json` declara:
+
+- `requiresCompatibilities: FARGATE`;
+- `networkMode: awsvpc`;
+- `cpu: 2048`;
+- `memory: 8192`;
+- porta `8090`;
+- `executionRoleArn`;
+- environment file em S3: `arn:aws:s3:::bdi-environment/fiap-tech-challenge-phase-4.env`;
+- variaveis de cache/modelos para execucao em container.
+
+## ECR
+
+O workflow da API autentica no Amazon ECR, cria a imagem Docker e publica a tag `latest`.
+
+```text
+docker build -t <registry>/fiap-tech-challenge-phase-4:latest .
+docker push <registry>/fiap-tech-challenge-phase-4:latest
+```
+
+A imagem renderizada pelo workflow e injetada no `task-def.json` antes do deploy no ECS.
+
+## CloudWatch Logs
+
+O monitoramento operacional de logs para o container ECS esta configurado em `task-def.json` por `awslogs`:
+
+```text
+awslogs-group: /ecs/fiap-tech-challenge-phase-4-task
+awslogs-region: us-east-1
+awslogs-stream-prefix: ecs
+```
+
+Isso complementa os logs estruturados JSON emitidos pela aplicacao em stdout.
 
 ## CloudFront
 
-Nao foi localizada configuracao de CloudFront, distribuicao, invalidacao, bucket website, origem ou IaC no codigo analisado.
+O workflow do frontend publica o build estatico em S3, que e o padrao usado como origem para CloudFront.
 
-O frontend gera build estatico com Vite em `dist/`, que tecnicamente poderia ser hospedado atras de CloudFront, mas essa integracao nao esta implementada no repositorio.
+Nao foi localizada no repositorio a definicao da distribuicao CloudFront, origem, behaviors, certificados, invalidation de cache ou politica de cache. Portanto, a integracao CloudFront deve ser entendida como dependente de recurso AWS externo ao codigo versionado; o que esta versionado e o deploy do conteudo para o bucket S3 usado pela camada de distribuicao.
 
 # Modelos de IA Utilizados
 
@@ -806,7 +989,7 @@ Finalidade:
 Repositorios:
 
 - treinamento: `fiap-tech-challenge-phase-4-model`;
-- inferencia: `fiap-tech-challenge-phase-4`.
+- inferencia: `fiap-tech-challenge-phase-4-api`.
 
 Implementacao offline:
 
@@ -901,7 +1084,7 @@ Estrategia de treinamento:
 Repositorios:
 
 - treinamento: `fiap-tech-challenge-phase-4-model`;
-- inferencia: `fiap-tech-challenge-phase-4`.
+- inferencia: `fiap-tech-challenge-phase-4-api`.
 
 Implementacao de treinamento:
 
@@ -1062,6 +1245,7 @@ caso contrario                      -> baixo
 Monitoramento implementado:
 
 - logs estruturados JSON em stdout;
+- envio de logs do container ECS para CloudWatch Logs via driver `awslogs` em `task-def.json`;
 - middleware HTTP com `request_id`, metodo, path, status, duracao e host;
 - logs por etapa da inferencia:
   - upload validado;
@@ -1084,7 +1268,7 @@ Monitoramento nao implementado no codigo:
 
 - metricas Prometheus;
 - tracing distribuido;
-- dashboard CloudWatch;
+- dashboard CloudWatch versionado;
 - alarmes versionados;
 - logs estruturados com correlacao entre frontend e backend alem de `x-request-id`;
 - monitoramento de drift de modelos;
@@ -1149,7 +1333,11 @@ Servico de API:
 
 | Servico | Implementacao |
 | --- | --- |
-| AWS S3 | `boto3` no backend |
+| AWS S3 | `boto3` no backend, deploy estatico do frontend e environment file da task ECS |
+| Amazon ECR | workflow da API faz build/push da imagem Docker |
+| Amazon ECS Fargate | workflow da API renderiza `task-def.json` e atualiza service/cluster |
+| CloudWatch Logs | `task-def.json` usa log driver `awslogs` |
+| CloudFront | bucket S3 do frontend e tratado como origem externa; distribuicao nao esta versionada |
 | Hugging Face Hub | download de datasets e modelos |
 | faster-whisper | transcricao local |
 | Vite dev proxy | proxy local `/api` para backend |
@@ -1312,7 +1500,8 @@ Riscos e lacunas:
 - ausencia de trilha formal de auditoria de acesso;
 - ausencia de criptografia ou mascaramento adicional para transcricoes no frontend;
 - ausencia de politica versionada de retencao S3;
-- ausencia de IAM/IaC versionado;
+- IAM aparece por `executionRoleArn` e secrets do GitHub Actions, mas nao ha politicas IAM completas versionadas no repositorio;
+- IaC/deploy existe como GitHub Actions e `task-def.json`, mas nao ha stack Terraform/CloudFormation/CDK para criar todos os recursos AWS;
 - ausencia de consentimento, anonimizacao e governanca documentados em codigo para dados reais.
 
 # Escalabilidade
@@ -1323,7 +1512,8 @@ Caracteristicas atuais:
 - cada chamada pode carregar/processar Whisper, WavLM, MPNet e transformer;
 - caches `lru_cache` reduzem custo de recarregamento de modelos;
 - S3 e usado apenas como armazenamento temporario;
-- Fargate/ECS e mencionado como ambiente-alvo, mas sem IaC.
+- deploy da API em ECS Fargate esta versionado via GitHub Actions e `task-def.json`;
+- frontend e publicado em S3 por GitHub Actions, permitindo distribuicao estatica via CloudFront externo.
 
 Limitacoes para alta escala:
 
@@ -1525,7 +1715,7 @@ Os tres repositorios formam uma arquitetura coerente para o escopo de triagem vo
 - o backend entrega inferencia multimodal operacional com FastAPI, S3 temporario, Whisper, features acusticas, NLP, modelos joblib, transformer e detector de anomalias;
 - o frontend entrega uma experiencia funcional de upload, visualizacao, score de anomalia, alertas e explicabilidade.
 
-A arquitetura ja contempla os principais blocos do desafio: analise de voz, processamento multimodal, geracao de alertas, suporte a decisao e integracao com AWS S3. Entretanto, alguns itens do contexto do desafio estao documentados ou seriam evolucoes arquiteturais, mas nao aparecem implementados no codigo analisado: CloudFront, IaC de ECS e monitoramento operacional completo.
+A arquitetura ja contempla os principais blocos do desafio: analise de voz, processamento multimodal, geracao de alertas, suporte a decisao, integracao com AWS S3, deploy estatico do frontend para S3, deploy da API em ECS Fargate via ECR e logs do container em CloudWatch Logs. A distribuicao CloudFront e tratada como camada externa associada ao bucket S3 do frontend; a distribuicao em si, politicas de cache, certificados, invalidations, alarmes CloudWatch e autoscaling ainda nao aparecem como recursos plenamente versionados no codigo analisado.
 
 Para uso corporativo ou clinico real, os proximos passos recomendados sao:
 

@@ -1,0 +1,75 @@
+flowchart LR
+  usuario["Usuario / profissional de saude"]
+
+  subgraph model["fiap-tech-challenge-phase-4-model"]
+    raw["raw/<br/>WomanHealthFIAP, EATD, EMU,<br/>VoiceRiskTraining, VoiceRiskSynthetic"]
+    processing["Pipeline offline<br/>download, validate, prepare_audio,<br/>build_metadata, embeddings, splits"]
+    unified["Unified Dataset<br/>train.parquet, validation.parquet,<br/>test.parquet, schema.json"]
+    training["Treinamento<br/>baseline, multimodal transformer,<br/>anomaly detector, voice risk"]
+    modelArtifacts["Artefatos gerados<br/>joblib, model.pt,<br/>metrics.json, configs"]
+  end
+
+  subgraph web["fiap-tech-challenge-phase-4-web"]
+    dashboard["React/Vite Dashboard<br/>upload, cards, alertas,<br/>anomalia, graficos"]
+    webWorkflow["GitHub Actions Web<br/>yarn build"]
+    webDist["dist/"]
+  end
+
+  subgraph api["fiap-tech-challenge-phase-4-api"]
+    routes["FastAPI<br/>GET /health<br/>POST /audio/analyze"]
+    storage["AudioStorageService<br/>validacao, temporario local,<br/>S3 upload/delete"]
+    inference["Pipeline online<br/>Whisper, acustica, NLP,<br/>joblib, transformer, anomalia"]
+    alerts["AlertGenerator<br/>severidade e justificativas"]
+    apiArtifacts["artifacts/models<br/>voice risk, transformer,<br/>anomaly_detector"]
+    docker["Dockerfile<br/>Python 3.12, ffmpeg,<br/>preload Whisper"]
+    taskDef["task-def.json<br/>Fargate, env file S3,<br/>awslogs"]
+    apiWorkflow["GitHub Actions API<br/>build, ECR push,<br/>ECS deploy"]
+  end
+
+  subgraph aws["AWS"]
+    s3Frontend["S3 static bucket<br/>fiap-tech-challenge-phase-4"]
+    cloudfront["CloudFront<br/>distribuicao externa ao repo"]
+    s3Audio["S3 audio temporario"]
+    s3Env["S3 environment file<br/>bdi-environment"]
+    ecr["Amazon ECR<br/>imagem da API"]
+    ecs["Amazon ECS Fargate<br/>service fiap-tech-challenge-phase-4-service<br/>cluster bdi-prd"]
+    logs["CloudWatch Logs<br/>/ecs/fiap-tech-challenge-phase-4-task"]
+  end
+
+  subgraph external["Servicos externos / modelos base"]
+    hf["Hugging Face Hub<br/>datasets, WavLM, MPNet"]
+    whisper["faster-whisper<br/>modelo local"]
+  end
+
+  usuario --> dashboard
+  dashboard -->|"multipart/form-data"| routes
+  routes --> storage
+  storage --> s3Audio
+  routes --> inference
+  inference --> whisper
+  inference --> hf
+  inference --> apiArtifacts
+  inference --> alerts
+  alerts --> routes
+  routes -->|"JSON AnalyzeResponse"| dashboard
+
+  hf --> raw
+  raw --> processing
+  processing --> unified
+  unified --> training
+  training --> modelArtifacts
+  modelArtifacts -->|"copia/publicacao manual"| apiArtifacts
+
+  webWorkflow --> webDist
+  webDist --> s3Frontend
+  s3Frontend --> cloudfront
+  cloudfront --> usuario
+
+  apiWorkflow --> docker
+  docker --> ecr
+  apiWorkflow --> taskDef
+  taskDef --> ecs
+  ecr --> ecs
+  s3Env --> ecs
+  ecs --> routes
+  ecs --> logs
